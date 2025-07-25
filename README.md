@@ -18,3 +18,7 @@ While most state-of-the-art models use tokenizers to operate on word or sub-word
 *   **No Out-of-Vocabulary (OOV) Tokens:** The model can, in theory, represent any text, including typos, rare words, or even multiple languages, without resorting to unknown (`<UNK>`) tokens.
 *   **Learning Word Structure:** By operating on characters, the model is forced to learn the structure of words, prefixes, and suffixes from the ground up, which is a valuable learning exercise.
 *   **Robustness:** Character-level models can be more robust to noise and variations in the input text.
+
+
+## TODO
+* Read about attention-dropout
