@@ -56,7 +56,31 @@ class MultiHeadSelfAttention(nn.Module):
         y = self.proj_dropout(y)
         
         return y
+
+class MLP(nn.Module):
+    """
+    FFN with GEGLU. See https://arxiv.org/pdf/2002.05202
+    GEGLU: h_gate = x @ W_gate h_up = x @ W_up -> h = gelu(h_gate) * h_up
+            -> y = h @ W_down
+    """
+    def __init__(
+        self,
+        n_embd: int,
+        hidden_size: int
+    ):
+        super().__init__()
+        self.w_gate = nn.Linear(n_embd, hidden_size, bias=False)
+        self.w_up = nn.Linear(n_embd, hidden_size, bias=False)
+        self.w_down = nn.Linear(hidden_size, n_embd, bias=False)
+    
+    def forward(self, x):
+        h_gate = self.w_gate(x) # (B, T, hidden_size)
+        h_up = self.w_up(x) # (B, T, hidden_size)
+        h = F.gelu(h_gate, approximate='tanh') * h_up # (B, T, hidden_size)
         
+        y = self.w_down(h) # (B, T, n_embd)
+        
+        return y
         
 class T5(nn.Module):
     
@@ -71,6 +95,9 @@ if __name__ == "__main__":
     
     # check if it runs
     mh_attn = MultiHeadSelfAttention(T5Config.n_embd, T5Config.n_head, attn_droput=0.1, attn_proj_droput=0.1)
+    mlp = MLP(T5Config.n_embd, 4*T5Config.n_embd)
     
     x = torch.randn(1, 10, T5Config.n_embd)    
-    y = mh_attn(x)
+    x = mh_attn(x)
+    x = mlp(x)
+    
