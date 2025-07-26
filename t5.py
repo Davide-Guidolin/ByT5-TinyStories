@@ -66,12 +66,14 @@ class MLP(nn.Module):
     def __init__(
         self,
         n_embd: int,
-        hidden_size: int
+        hidden_size: int,
+        dropout: float = 0.0
     ):
         super().__init__()
         self.w_gate = nn.Linear(n_embd, hidden_size, bias=False)
         self.w_up = nn.Linear(n_embd, hidden_size, bias=False)
         self.w_down = nn.Linear(hidden_size, n_embd, bias=False)
+        self.dropout = nn.Dropout(dropout)
     
     def forward(self, x):
         h_gate = self.w_gate(x) # (B, T, hidden_size)
@@ -79,9 +81,34 @@ class MLP(nn.Module):
         h = F.gelu(h_gate, approximate='tanh') * h_up # (B, T, hidden_size)
         
         y = self.w_down(h) # (B, T, n_embd)
+        y = self.dropout(y)
         
         return y
+
+class EncoderBlock(nn.Module):
+    def __init__(
+        self,
+        config: T5Config
+    ):
+        super().__init__()
+        self.ln_1 = nn.LayerNorm(config.n_embd, bias=False)
+        self.attn = MultiHeadSelfAttention(
+            config.n_embd, 
+            config.n_head, 
+            config.attn_dropout,
+            config.attn_proj_dropout
+        )
+        self.ln_2 = nn.LayerNorm(config.n_embd, bias=False)
+        self.mlp = MLP(config.n_embd, config.mlp_hidden_size, config.mlp_dropout)
+        self.dropout = nn.Dropout(config.skip_conn_dropout)
         
+    def forward(self, x):
+        x = x + self.dropout(self.attn(self.ln_1(x)))
+        x = x + self.dropout(self.mlp(self.ln_2(x)))
+        
+        return x        
+        
+            
 class T5(nn.Module):
     
     def __init__(self, config: T5Config):
@@ -94,10 +121,8 @@ class T5(nn.Module):
 if __name__ == "__main__":
     
     # check if it runs
-    mh_attn = MultiHeadSelfAttention(T5Config.n_embd, T5Config.n_head, attn_droput=0.1, attn_proj_droput=0.1)
-    mlp = MLP(T5Config.n_embd, 4*T5Config.n_embd)
+    block = EncoderBlock(T5Config())
     
     x = torch.randn(1, 10, T5Config.n_embd)    
-    x = mh_attn(x)
-    x = mlp(x)
+    x = block(x)
     
