@@ -9,18 +9,22 @@ class MultiHeadSelfAttention(nn.Module):
 
     def __init__(
         self,
+        block_size: int,
         n_embd: int,
         n_head: int,
         attn_droput: float = 0.0,
-        attn_proj_droput: float = 0.0     
+        attn_proj_droput: float = 0.0,
+        is_causal: bool = False
     ):
         super().__init__()
         assert n_embd % n_head == 0
         
+        self.block_size = block_size
         self.n_head = n_head
         self.n_embd = n_embd
         self.dim_head = n_embd // n_head
         self.scale = self.dim_head ** -0.5
+        self.is_causal = is_causal
         
         # key, query, value for all heads (will be split later)
         self.attn = nn.Linear(n_embd, 3*n_embd, bias=False)
@@ -29,6 +33,10 @@ class MultiHeadSelfAttention(nn.Module):
         
         self.attn_dropout = nn.Dropout(p=attn_droput)
         self.proj_dropout = nn.Dropout(p=attn_proj_droput)
+        
+        if self.is_causal:
+            mask = torch.tril(torch.ones(self.block_size, self.block_size)).view(1, 1, self.block_size, self.block_size)
+            self.register_buffer("bias", mask)
         
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         
@@ -46,6 +54,11 @@ class MultiHeadSelfAttention(nn.Module):
         
         # attention calculation
         attn = (q @ k.transpose(-2, -1)) / self.scale # (B, n_head, T, T)
+        if self.is_causal:
+            # mask future tokens
+            mask = self.bias[:, :, :T, :T] == 0
+            attn = attn.masked_fill(mask, -torch.inf)
+        
         attn = F.softmax(attn, dim=-1)
         attn = self.attn_dropout(attn)
         y = attn @ v # (B, n_head, T, dim_head)
@@ -57,66 +70,6 @@ class MultiHeadSelfAttention(nn.Module):
         
         return y
     
-class MaskedMultiHeadSelfAttention(nn.Module):
-    def __init__(
-        self,
-        block_size: int,
-        n_embd: int,
-        n_head: int,
-        attn_droput: float = 0.0,
-        attn_proj_droput: float = 0.0     
-    ):
-        super().__init__()
-        assert n_embd % n_head == 0
-        
-        self.block_size = block_size
-        self.n_head = n_head
-        self.n_embd = n_embd
-        self.dim_head = n_embd // n_head
-        self.scale = self.dim_head ** -0.5
-        
-        # key, query, value for all heads (will be split later)
-        self.attn = nn.Linear(n_embd, 3*n_embd, bias=False)
-        # final projection
-        self.proj = nn.Linear(n_embd, n_embd, bias=False)
-        
-        self.attn_dropout = nn.Dropout(p=attn_droput)
-        self.proj_dropout = nn.Dropout(p=attn_proj_droput)
-        
-        mask = torch.tril(torch.ones(self.block_size, self.block_size)).view(1, 1, self.block_size, self.block_size)
-        self.register_buffer("bias", mask)
-        
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        
-        # batch size, sequence length, embedding dimensionality (n_embd)
-        B, T, C = x.size()
-        
-        qkv = self.attn(x) # (B, T, C * 3)
-        # split in 3
-        q, k, v = qkv.split(self.n_embd, dim=2) # 3 x (B, T, C)
-        
-        # prepare for multi-head
-        q = q.view(B, T, self.n_head, self.dim_head).transpose(1, 2) # (B, n_head, T, dim_head)
-        k = k.view(B, T, self.n_head, self.dim_head).transpose(1, 2) # (B, n_head, T, dim_head)
-        v = v.view(B, T, self.n_head, self.dim_head).transpose(1, 2) # (B, n_head, T, dim_head)
-        
-        # attention calculation
-        attn = (q @ k.transpose(-2, -1)) / self.scale # (B, n_head, T, T)
-        # mask future tokens
-        mask = self.bias[:, :, :T, :T] == 0
-        attn = attn.masked_fill(mask, -torch.inf)
-        # softmax
-        attn = F.softmax(attn, dim=-1)
-        attn = self.attn_dropout(attn)
-        y = attn @ v # (B, n_head, T, dim_head)
-        
-        # output projection
-        y = y.transpose(1, 2).contiguous().view(B, T, C)
-        y = self.proj(y)
-        y = self.proj_dropout(y)
-        
-        return y
-
 class MLP(nn.Module):
     """
     FFN with GEGLU. See https://arxiv.org/pdf/2002.05202
@@ -153,10 +106,12 @@ class EncoderBlock(nn.Module):
         super().__init__()
         self.ln_1 = nn.LayerNorm(config.n_embd, bias=False)
         self.attn = MultiHeadSelfAttention(
+            config.block_size,
             config.n_embd, 
             config.n_head, 
             config.attn_dropout,
-            config.attn_proj_dropout
+            config.attn_proj_dropout,
+            is_causal=False
         )
         self.ln_2 = nn.LayerNorm(config.n_embd, bias=False)
         self.mlp = MLP(config.n_embd, config.mlp_hidden_size, config.mlp_dropout)
