@@ -174,7 +174,40 @@ class EncoderBlock(nn.Module):
         
         return x        
         
-            
+class DecoderBlock(nn.Module):
+    def __init__(
+        self,
+        config: T5Config
+    ):
+        super().__init__()
+        self.ln_1 = nn.LayerNorm(config.n_embd, bias=False)
+        self.causal_attn = MultiHeadSelfAttention(
+            config.block_size,
+            config.n_embd, 
+            config.n_head, 
+            config.attn_dropout,
+            config.attn_proj_dropout,
+            is_causal=True
+        )
+        self.ln_2 = nn.LayerNorm(config.n_embd, bias=False)
+        self.cross_attn = CrossAttention(
+            config.block_size,
+            config.n_embd, 
+            config.n_head, 
+            config.attn_dropout,
+            config.attn_proj_dropout
+        )
+        self.ln_3 = nn.LayerNorm(config.n_embd, bias=False)
+        self.mlp = MLP(config.n_embd, config.mlp_hidden_size, config.mlp_dropout)
+        self.dropout = nn.Dropout(config.skip_conn_dropout)
+        
+    def forward(self, x: torch.Tensor, encoder_out: torch.Tensor) -> torch.Tensor:
+        x = x + self.dropout(self.causal_attn(self.ln_1(x)))
+        x = x + self.dropout(self.cross_attn(self.ln_2(x), encoder_out))
+        x = x + self.dropout(self.mlp(self.ln_3(x)))
+        
+        return x
+  
 class T5(nn.Module):
     
     def __init__(self, config: T5Config):
@@ -187,8 +220,11 @@ class T5(nn.Module):
 if __name__ == "__main__":
     
     # check if it runs
-    block = EncoderBlock(T5Config())
+    enc = EncoderBlock(T5Config())
+    dec = DecoderBlock(T5Config())
     
-    x = torch.randn(1, 10, T5Config.n_embd)    
-    x = block(x)
+    x_enc = torch.randn(1, 10, T5Config.n_embd)
+    x_dec = torch.randn(1, 1, T5Config.n_embd)
+    enc_out = enc(x_enc)
+    dec_out = dec(x_dec, enc_out)
     
