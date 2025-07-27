@@ -69,7 +69,58 @@ class MultiHeadSelfAttention(nn.Module):
         y = self.proj_dropout(y)
         
         return y
-    
+
+class CrossAttention(nn.Module):
+    def __init__(
+        self,
+        block_size: int,
+        n_embd: int,
+        n_head: int,
+        attn_droput: float = 0.0,
+        attn_proj_droput: float = 0.0
+    ):
+        super().__init__()
+        assert n_embd % n_head == 0
+        
+        self.block_size = block_size
+        self.n_head = n_head
+        self.n_embd = n_embd
+        self.dim_head = n_embd // n_head
+        self.scale = self.dim_head ** -0.5
+        
+        # query, key, value
+        self.attn_q = nn.Linear(n_embd, n_embd, bias=False)
+        self.attn_kv = nn.Linear(n_embd, 2*n_embd, bias=False)
+        # final projection
+        self.proj = nn.Linear(n_embd, n_embd, bias=False)
+        
+        self.attn_dropout = nn.Dropout(p=attn_droput)
+        self.proj_dropout = nn.Dropout(p=attn_proj_droput)
+
+    def forward(self, x_q: torch.Tensor, x_kv: torch.Tensor) -> torch.Tensor:
+        
+        B, T_q, C = x_q.size()
+        _, T_kv, _ = x_kv.size()
+        
+        q = self.attn_q(x_q)
+        kv = self.attn_kv(x_kv)
+        k, v = kv.split(self.n_embd, dim=2)
+        
+        q = q.view(B, T_q, self.n_head, self.dim_head).transpose(1, 2)
+        k = k.view(B, T_kv, self.n_head, self.dim_head).transpose(1, 2)
+        v = v.view(B, T_kv, self.n_head, self.dim_head).transpose(1, 2)
+        
+        attn = (q @ k.transpose(-2, -1)) / self.scale        
+        attn = F.softmax(attn, dim=-1)
+        attn = self.attn_dropout(attn)
+        y = attn @ v
+        
+        y = y.transpose(1, 2).contiguous().view(B, T_q, C)
+        y = self.proj(y)
+        y = self.proj_dropout(y)
+        
+        return y
+        
 class MLP(nn.Module):
     """
     FFN with GEGLU. See https://arxiv.org/pdf/2002.05202
@@ -88,7 +139,7 @@ class MLP(nn.Module):
         self.w_down = nn.Linear(hidden_size, n_embd, bias=False)
         self.dropout = nn.Dropout(dropout)
     
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         h_gate = self.w_gate(x) # (B, T, hidden_size)
         h_up = self.w_up(x) # (B, T, hidden_size)
         h = F.gelu(h_gate, approximate='tanh') * h_up # (B, T, hidden_size)
@@ -117,7 +168,7 @@ class EncoderBlock(nn.Module):
         self.mlp = MLP(config.n_embd, config.mlp_hidden_size, config.mlp_dropout)
         self.dropout = nn.Dropout(config.skip_conn_dropout)
         
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = x + self.dropout(self.attn(self.ln_1(x)))
         x = x + self.dropout(self.mlp(self.ln_2(x)))
         
