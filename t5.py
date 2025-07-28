@@ -213,18 +213,71 @@ class T5(nn.Module):
     def __init__(self, config: T5Config):
         super().__init__()
         
-        self.n_head = config.n_head
-        self.n_layer = config.n_layer
+        self.config = config
         
+        self.transformer = nn.ModuleDict(dict(
+            # word token embedding
+            wte = nn.Embedding(config.vocab_size, config.n_embd),
+            # word positional embedding
+            wpe = nn.Embedding(config.block_size, config.n_embd),
+            # dropout for embedding
+            drop = nn.Dropout(config.embd_dropout),
+            # encoder
+            encoder = nn.ModuleList([EncoderBlock(config) for _ in range(config.n_layer_enc)]),
+            ln_enc = nn.LayerNorm(config.n_embd, bias=False),
+            # decoder
+            decoder = nn.ModuleList([DecoderBlock(config) for _ in range(config.n_layer_dec)]),
+            ln_dec = nn.LayerNorm(config.n_embd, bias=False)
+        ))
+        # Final head
+        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+        # Weight tying with embedding
+        self.lm_head.weight = self.transformer.wte.weight
+        
+    def forward(self, src_idx: torch.Tensor, trg_idx: torch.Tensor = None) -> torch.Tensor:
+        _, T_src = src_idx.size()
+        _, T_trg = trg_idx.size()
+        assert T_src <= self.config.block_size, f"Cannot forward sequence of length {T_src}, maximum block size is {self.config.block_size}"
+        assert T_trg <= self.config.block_size, f"Cannot use sequence of length {T_trg} as target, maximum block size is {self.config.block_size}"
+        
+        # Encoder
+        src_emb = self.transformer.wte(src_idx)
+        pos = torch.arange(0, T_src, dtype=torch.long, device=src_idx.device)
+        src_pos_enc = self.transformer.wpe(pos)
+        enc_x = src_emb + src_pos_enc
+        enc_x = self.transformer.drop(enc_x)
+        
+        for block in self.transformer.encoder:
+            enc_x = block(enc_x)
+        
+        encoder_out = self.transformer.ln_enc(enc_x)
+        
+        # Decoder
+        trg_emb = self.transformer.wte(trg_idx)
+        pos = torch.arange(0, T_trg, dtype=torch.long, device=trg_idx.device)
+        trg_pos_enc = self.transformer.wpe(pos)
+        dec_x = trg_emb + trg_pos_enc
+        dec_x = self.transformer.drop(dec_x)
+        
+        for block in self.transformer.decoder:
+            dec_x = block(dec_x, encoder_out)
+
+        decoder_out = self.transformer.ln_dec(dec_x)
+        
+        # Final Head
+        logits = self.lm_head(decoder_out)
+        
+        return logits
 
 if __name__ == "__main__":
     
     # check if it runs
-    enc = EncoderBlock(T5Config())
-    dec = DecoderBlock(T5Config())
+    config = T5Config()
+    model = T5(config)
     
-    x_enc = torch.randn(1, 10, T5Config.n_embd)
-    x_dec = torch.randn(1, 1, T5Config.n_embd)
-    enc_out = enc(x_enc)
-    dec_out = dec(x_dec, enc_out)
+    src = torch.randint(0, config.vocab_size, (1, 10)) # Batch size 1, sequence length 10
+    trg = torch.randint(0, config.vocab_size, (1, 5))
+    
+    logits = model(src, trg)
+    print(logits.shape)
     
