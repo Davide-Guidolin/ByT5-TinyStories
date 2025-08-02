@@ -1,6 +1,7 @@
 from datasets import load_dataset, Dataset as HFDataset 
 import torch
 from torch.utils.data import Dataset
+from torch.nn.utils.rnn import pad_sequence
 from config import DataConfig
 import numpy as np
 from copy import deepcopy
@@ -111,13 +112,43 @@ class TinyStoriesDataset(Dataset):
             
         return source_ids, target_ids
         
+
+class PadCollator:
+    def __init__(self, pad_token_id: int):
+        self.pad_token_id = pad_token_id
+        
+    def __call__(self, batch):
     
+        # separate source and target
+        sources = [i[0] for i in batch]
+        targets = [i[1] for i in batch]
+        
+        # pad sequences
+        padded_sources = pad_sequence(
+            sources,
+            batch_first=True,
+            padding_value=self.pad_token_id
+        )
+        
+        padded_targets = pad_sequence(
+            targets,
+            batch_first=True,
+            padding_value=self.pad_token_id
+        )
+        
+        return padded_sources, padded_targets
+    
+
 if __name__ == "__main__":
+    from torch.utils.data import DataLoader
     config = DataConfig()
     ds = TinyStoriesDataset(config, ts_dataset=TinyStories(), split="train")
+    collator = PadCollator(config.pad_token_id)
     
-    x, y = ds[0]
+    loader = DataLoader(ds, batch_size=2, collate_fn=collator)
     
-    print(x)
-    print("------")
-    print(y)
+    for x, y in loader:
+        print(x)
+        print("------")
+        print(y)
+        break
