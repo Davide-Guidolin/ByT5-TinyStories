@@ -334,6 +334,9 @@ class T5(nn.Module):
         logits = self.lm_head(decoder_out)
         
         return logits
+    
+    def print_info(self):
+        print(f"Total parameters: {sum(p.numel() for p in self.parameters())/1e6:.2f} M")
 
 if __name__ == "__main__":
     
