@@ -157,9 +157,22 @@ class PadCollator:
         sources = [i[0] for i in batch]
         targets = [i[1] for i in batch]
         
+        # create decoder input by prepending PAD and removing last token
+        decoder_inputs = []
+        for t in targets:
+            pad_tensor = torch.tensor([self.pad_token_id], dtype=t.dtype)
+            dec_input = torch.cat([pad_tensor, t[:-1]])
+            decoder_inputs.append(dec_input)
+        
         # pad sequences
         padded_sources = pad_sequence(
             sources,
+            batch_first=True,
+            padding_value=self.pad_token_id
+        )
+        
+        padded_decoder_inputs = pad_sequence(
+            decoder_inputs,
             batch_first=True,
             padding_value=self.pad_token_id
         )
@@ -170,7 +183,7 @@ class PadCollator:
             padding_value=self.pad_token_id
         )
         
-        return padded_sources, padded_targets
+        return padded_sources, padded_decoder_inputs, padded_targets
     
 
 if __name__ == "__main__":
@@ -181,8 +194,10 @@ if __name__ == "__main__":
     
     loader = DataLoader(ds, batch_size=2, collate_fn=collator)
     
-    for x, y in loader:
+    for x, dec_input, y in loader:
         print(x)
+        print("------")
+        print(dec_input)
         print("------")
         print(y)
         break
