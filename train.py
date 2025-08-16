@@ -1,6 +1,7 @@
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
+from torch.cuda.amp import autocast
 from data import TinyStoriesDataset, PadCollator, TinyStories
 from t5 import T5
 from config import T5Config, DataConfig, TrainConfig
@@ -36,7 +37,12 @@ if __name__ == "__main__":
     # load dataset
     dataset = TinyStories()
     
-    train_set = TinyStoriesDataset(data_config, ts_dataset=dataset, split="train")
+    train_set = TinyStoriesDataset(
+        data_config, 
+        ts_dataset=dataset,
+        split="train",
+        block_size=t5_config.block_size
+    )
     train_loader = DataLoader(
         train_set, 
         batch_size=train_config.B,
@@ -47,7 +53,12 @@ if __name__ == "__main__":
     )
     train_iter = cycle(train_loader)
         
-    valid_set = TinyStoriesDataset(data_config, ts_dataset=dataset, split="validation")
+    valid_set = TinyStoriesDataset(
+        data_config, 
+        ts_dataset=dataset,
+        split="validation",
+        block_size=t5_config.block_size
+    )
     valid_loader = DataLoader(
         valid_set, 
         batch_size=train_config.B,
@@ -73,7 +84,8 @@ if __name__ == "__main__":
     
     # optimizer
     optimizer = torch.optim.AdamW(model.parameters(), lr=train_config.max_lr, betas=(0.9, 0.95), eps=1e-8)
-    
+    optimizer.zero_grad()
+
     # training loop
     for step in range(train_config.max_step):
         t0 = time.perf_counter()
@@ -83,32 +95,30 @@ if __name__ == "__main__":
         dec_input = dec_input.to(device)
         target = target.to(device)
         
-        optimizer.zero_grad()
-        
-        print(source.shape)
-        print(dec_input.shape)
-        print(target.shape)
-        
-        logits = model(source, dec_input)
-        print(logits.shape)
+        with autocast(dtype=torch.bfloat16):
+            logits = model(source, dec_input)
 
-        loss = F.cross_entropy(
-            logits.view(-1, logits.size(-1)),
-            target.view(-1),
-            ignore_index=data_config.pad_token_id)
+            loss = F.cross_entropy(
+                logits.view(-1, logits.size(-1)),
+                target.view(-1),
+                ignore_index=data_config.pad_token_id
+            )
+        
+        loss = loss / train_config.accumulation_step
         
         loss.backward()
         
-        # clip gradients
-        norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-        
-        # lr = get_lr(step)
-        
-        optimizer.step()
+        if (step + 1) % train_config.accumulation_step == 0:
+            # clip gradients
+            norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            print(f"step {step:4d} | grad_norm: {norm:.4f}")
+            # lr = get_lr(step)
+            optimizer.step()
+            optimizer.zero_grad()
         
         torch.cuda.synchronize()
         t1 = time.perf_counter()
         dt = (t1 - t0) * 1000
         tok_per_sec = source.numel() / (t1 - t0)
         
-        print(f"step {step:4d} | loss: {loss.item():.6f} | lr: TODO | grad_norm: {norm:.4f} | dt: {dt:.2f}ms | tok/sec: {tok_per_sec:.2f}")
+        print(f"step {step:4d} | loss: {loss.item():.6f} | lr: TODO | dt: {dt:.2f}ms | tok/sec: {tok_per_sec:.2f}")
