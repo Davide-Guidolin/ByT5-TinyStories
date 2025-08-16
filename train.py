@@ -6,6 +6,7 @@ from data import TinyStoriesDataset, PadCollator, TinyStories
 from t5 import T5
 from config import T5Config, DataConfig, TrainConfig
 import time
+import math
 
 def init_torch(seed: int = 42):
     device = "cpu"
@@ -26,6 +27,20 @@ def cycle(iter):
     while True:
         for x in iter:
             yield x
+
+# cosine decaying lr with linear warmup from gpt2 paper
+def get_lr(step, train_config):
+    # linear warmup
+    if step < train_config.warmup_steps:
+        return train_config.max_lr * (step+1) / train_config.warmup_steps
+    if step > train_config.max_step:
+        return train_config.min_lr
+    
+    decay_ratio = (step - train_config.warmup_steps) / (train_config.max_step - train_config.warmup_steps)
+    assert 0 <= decay_ratio <= 1
+    coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
+    
+    return train_config.min_lr + coeff * (train_config.max_lr - train_config.min_lr)
 
 if __name__ == "__main__":
     device = init_torch()
@@ -104,15 +119,19 @@ if __name__ == "__main__":
                 ignore_index=data_config.pad_token_id
             )
         
-        loss = loss / train_config.accumulation_step
+        loss = loss / train_config.accumulation_steps
         
         loss.backward()
         
-        if (step + 1) % train_config.accumulation_step == 0:
+        if (step + 1) % train_config.accumulation_steps == 0:
             # clip gradients
             norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             print(f"step {step:4d} | grad_norm: {norm:.4f}")
-            # lr = get_lr(step)
+            lr = get_lr(step, train_config)
+            
+            for param_group in optimizer.param_groups:
+                param_group['lr'] = lr
+                
             optimizer.step()
             optimizer.zero_grad()
         
