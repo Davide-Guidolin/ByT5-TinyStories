@@ -28,9 +28,11 @@ class DataConfig:
     
 @dataclass
 class TrainConfig:
+    random_seed: int = 42
     B: int = 1 # batch size
     accumulation_steps: int = 8 # gradient accumulation steps
     max_lr: float = 6e-4
     min_lr: float = max_lr * 0.1
     warmup_steps: int = 10 * accumulation_steps
     max_step: int = 500 * accumulation_steps
+    save_interval: int = 100 * accumulation_steps

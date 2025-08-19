@@ -1,20 +1,27 @@
+from data import TinyStoriesDataset, PadCollator, TinyStories
+from t5 import T5
+from config import T5Config, DataConfig, TrainConfig
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torch.cuda.amp import autocast
-from data import TinyStoriesDataset, PadCollator, TinyStories
-from t5 import T5
-from config import T5Config, DataConfig, TrainConfig
+import numpy as np
+import os
 import time
 import math
+from dotenv import load_dotenv
+import wandb
+import random
 
-def init_torch(seed: int = 42):
+def init_torch_and_random(seed: int = 42):
     device = "cpu"
     
+    random.seed(seed)
+    np.random.seed(seed)
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         device = "cuda"
-        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
         
     print(f"Using device: {device}")
     
@@ -22,6 +29,25 @@ def init_torch(seed: int = 42):
     torch.set_float32_matmul_precision("high")
     
     return device
+
+def init_wandb(t5_config, data_config, train_config):
+    load_dotenv(dotenv_path="./wandb.env")
+    
+    wandbteam_name = os.getenv("WANDB_TEAM_NAME")
+    wandb_project_name = os.getenv("WANDB_PROJECT_NAME")
+    
+    full_config = {
+        "model": t5_config.__dict__,
+        "data": data_config.__dict__,
+        "training": train_config.__dict__
+    }
+    run = wandb.init(
+        entity=wandbteam_name,
+        project=wandb_project_name,
+        config=full_config,
+    )
+    
+    return run
 
 def cycle(iter):
     while True:
@@ -43,11 +69,13 @@ def get_lr(step, train_config):
     return train_config.min_lr + coeff * (train_config.max_lr - train_config.min_lr)
 
 if __name__ == "__main__":
-    device = init_torch()
     
     t5_config = T5Config()
     data_config = DataConfig()
     train_config = TrainConfig()
+    
+    device = init_torch_and_random(seed=train_config.random_seed)
+    run = init_wandb(t5_config, data_config, train_config)
     
     # load dataset
     dataset = TinyStories()
@@ -98,9 +126,14 @@ if __name__ == "__main__":
             print(f"Cannot compile the model. Cuda capability {cuda_cap[0]}.{cuda_cap[1]} < 7.0")
     
     # optimizer
-    optimizer = torch.optim.AdamW(model.parameters(), lr=train_config.max_lr, betas=(0.9, 0.95), eps=1e-8)
+    lr = get_lr(0, train_config)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, betas=(0.9, 0.95), eps=1e-8)
     optimizer.zero_grad()
 
+    accumulated_loss = 0.0
+    accumulated_delta_t = 0.0
+    accumulated_tok_per_sec = 0.0
+    
     # training loop
     for step in range(train_config.max_step):
         t0 = time.perf_counter()
@@ -119,14 +152,14 @@ if __name__ == "__main__":
                 ignore_index=data_config.pad_token_id
             )
         
-        loss = loss / train_config.accumulation_steps
+        accumulated_loss += loss.item()
         
+        loss = loss / train_config.accumulation_steps
         loss.backward()
         
         if (step + 1) % train_config.accumulation_steps == 0:
             # clip gradients
             norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            print(f"step {step:4d} | grad_norm: {norm:.4f}")
             lr = get_lr(step, train_config)
             
             for param_group in optimizer.param_groups:
@@ -134,10 +167,39 @@ if __name__ == "__main__":
                 
             optimizer.step()
             optimizer.zero_grad()
+            
+            avg_loss = accumulated_loss / train_config.accumulation_steps
+            accumulated_loss = 0.0
+            avg_dt = accumulated_delta_t / train_config.accumulation_steps
+            accumulated_delta_t = 0.0
+            avg_tok_per_sec = accumulated_tok_per_sec / train_config.accumulation_steps
+            accumulated_tok_per_sec = 0.0
+            
+            wandb.log({
+                "train_loss": avg_loss,
+                "learning_rate": lr,
+                "grad_norm": norm,
+                "dt": avg_dt,
+                "tok_per_sec": avg_tok_per_sec
+            }, step=step)
+            
+            print(f"step {step+1:5d} | loss: {avg_loss:.6f} | lr: {lr:.4e} | norm: {norm:.4f} | dt: {avg_dt:.2f} ms | tok/sec: {avg_tok_per_sec:.2f} ")
+            
+            if (step + 1) % train_config.save_interval == 0:
+                checkpoint = {
+                    'model': model.state_dict(),
+                    'optimizer': optimizer.state_dict(),
+                    'step': step,
+                    'loss': loss.item()
+                }
+                print(f"Saving checkpoint at step {step}...")
+                torch.save(checkpoint, f'checkpoint_{step}.pt')
+                print("Checkpoint saved")
         
         torch.cuda.synchronize()
         t1 = time.perf_counter()
         dt = (t1 - t0) * 1000
         tok_per_sec = source.numel() / (t1 - t0)
         
-        print(f"step {step:4d} | loss: {loss.item():.6f} | lr: TODO | dt: {dt:.2f}ms | tok/sec: {tok_per_sec:.2f}")
+        accumulated_delta_t += dt
+        accumulated_tok_per_sec += tok_per_sec
