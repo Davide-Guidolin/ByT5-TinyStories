@@ -285,18 +285,18 @@ class T5(nn.Module):
 
         res += torch.where(is_small, relative_position, val_if_large)
         return res
-        
-        
-    def forward(self, src_idx: torch.Tensor, trg_idx: torch.Tensor = None) -> torch.Tensor:
+    
+    def encode(self, src_idx: torch.Tensor) -> torch.Tensor:
         _, T_src = src_idx.size()
-        _, T_trg = trg_idx.size()
-        assert T_src <= self.config.block_size, f"Cannot forward sequence of length {T_src}, maximum block size is {self.config.block_size}"
-        assert T_trg <= self.config.block_size, f"Cannot use sequence of length {T_trg} as target, maximum block size is {self.config.block_size}"
         
-        # Encoder
         enc_pos = torch.arange(0, T_src, dtype=torch.long, device=src_idx.device)
         enc_relative_position = enc_pos[None, :] - enc_pos[:, None]
-        enc_rp_bucket = self._relative_position_bucket(enc_relative_position, self.config.n_position_buckets, self.config.max_bucket_offset)
+        enc_rp_bucket = self._relative_position_bucket(
+            enc_relative_position, 
+            self.config.n_position_buckets, 
+            self.config.max_bucket_offset,
+            bidirectional=True
+        )
           
         enc_position_bias = self.relative_wpe(enc_rp_bucket) # (T_src, T_src, n_head)
         enc_position_bias = enc_position_bias.permute(2, 0, 1).unsqueeze(0) # (1, n_head, T_src, T_src)
@@ -309,16 +309,32 @@ class T5(nn.Module):
         
         encoder_out = self.transformer.ln_enc(enc_x)
         
-        # Decoder
-        dec_pos = torch.arange(0, T_trg, dtype=torch.long, device=src_idx.device)
+        return encoder_out
+    
+    def decode(self, trg_idx: torch.Tensor, encoder_out: torch.Tensor) -> torch.Tensor:
+        _, T_trg = trg_idx.size()
+        _, T_src, _ = encoder_out.size()
+        
+        dec_pos = torch.arange(0, T_trg, dtype=torch.long, device=trg_idx.device)
         dec_relative_position = dec_pos[None, :] - dec_pos[:, None]
-        dec_rp_bucket = self._relative_position_bucket(dec_relative_position, self.config.n_position_buckets, self.config.max_bucket_offset, bidirectional=False)
+        dec_rp_bucket = self._relative_position_bucket(
+            dec_relative_position, 
+            self.config.n_position_buckets, 
+            self.config.max_bucket_offset, 
+            bidirectional=False
+        )
           
         dec_position_bias_self_attn = self.relative_wpe(dec_rp_bucket) # (T_trg, T_trg, n_head)
         dec_position_bias_self_attn = dec_position_bias_self_attn.permute(2, 0, 1).unsqueeze(0) # (1, n_head, T_trg, T_trg)
         
+        enc_pos = torch.arange(0, T_src, dtype=torch.long, device=encoder_out.device)
         dec_relative_position_cross_attn = enc_pos[None, :] - dec_pos[:, None]
-        dec_rp_bucket_cross_attn = self._relative_position_bucket(dec_relative_position_cross_attn, self.config.n_position_buckets, self.config.max_bucket_offset)
+        dec_rp_bucket_cross_attn = self._relative_position_bucket(
+            dec_relative_position_cross_attn, 
+            self.config.n_position_buckets, 
+            self.config.max_bucket_offset,
+            bidirectional=True
+        )
         dec_position_bias_cross_attn = self.relative_wpe(dec_rp_bucket_cross_attn)
         dec_position_bias_cross_attn = dec_position_bias_cross_attn.permute(2, 0, 1).unsqueeze(0)
         
@@ -326,7 +342,12 @@ class T5(nn.Module):
         dec_x = self.transformer.drop(trg_emb)
         
         for block in self.transformer.decoder:
-            dec_x = block(dec_x, encoder_out, position_bias_self_attn=dec_position_bias_self_attn, position_bias_cross_attn=dec_position_bias_cross_attn)
+            dec_x = block(
+                dec_x, 
+                encoder_out, 
+                position_bias_self_attn=dec_position_bias_self_attn, 
+                position_bias_cross_attn=dec_position_bias_cross_attn
+            )
 
         decoder_out = self.transformer.ln_dec(dec_x)
         
@@ -334,7 +355,90 @@ class T5(nn.Module):
         logits = self.lm_head(decoder_out)
         
         return logits
+        
+    def forward(self, src_idx: torch.Tensor, trg_idx: torch.Tensor = None) -> torch.Tensor:
+        _, T_src = src_idx.size()
+        _, T_trg = trg_idx.size()
+        assert T_src <= self.config.block_size, f"Cannot forward sequence of length {T_src}, maximum block size is {self.config.block_size}"
+        assert T_trg <= self.config.block_size, f"Cannot use sequence of length {T_trg} as target, maximum block size is {self.config.block_size}"
+        
+        # Encoder
+        encoder_out = self.encode(src_idx)
+        
+        # Decoder
+        logits = self.decode(trg_idx, encoder_out)
+        
+        return logits
     
+    @torch.no_grad
+    def generate(
+        self, 
+        prompt: torch.Tensor, 
+        max_new_tokens: int = 10, 
+        eos_token_id: int = 257, 
+        pad_token_id: int = 256,
+        temperature: float = 1.0,
+        top_k: int = None,
+        top_p: float = None
+    ) -> torch.Tensor:        
+        assert max_new_tokens <= self.config.block_size, f"Cannot generate a sequence of length {max_new_tokens}, maximum block size is {self.config.block_size}"
+        
+        # run encoder once
+        encoder_out = self.encode(prompt)
+        
+        # start decode with pad token
+        dec_idx = torch.tensor([[pad_token_id]], dtype=torch.long, device=prompt.device)
+        
+        # autoregressive loop
+        for _ in range(max_new_tokens):
+            logits = self.decode(dec_idx, encoder_out)
+            
+            # logits for last token
+            last_tok_logits = logits[:, -1, :]
+            last_tok_logits /= temperature
+            
+            # sample token
+            probs = F.softmax(last_tok_logits, dim=-1)
+            
+            # top_k filtering
+            if top_k is not None:
+                top_k_probs, _ = torch.topk(probs, k=top_k, dim=-1)
+                top_k_probs = top_k_probs[:, [-1]]
+                
+                mask = probs >= top_k_probs
+                probs = torch.where(mask, probs, 0)
+                
+                # normalize
+                probs = probs / torch.sum(probs, dim=-1, keepdim=True)
+                
+            # top_p filtering
+            if top_p is not None:
+                sorted_probs, sorted_idxs = torch.sort(probs, descending=True)
+                cum_probs = torch.cumsum(sorted_probs, dim=-1)
+                
+                sorted_idxs_to_remove = cum_probs > top_p
+                # include the index going above top_p
+                sorted_idxs_to_remove[..., 1:] = sorted_idxs_to_remove[..., :-1].clone()
+                # safety check to include at least the first index
+                sorted_idxs_to_remove[..., 0] = 0
+                
+                idxs_to_remove = sorted_idxs_to_remove.scatter(dim=-1, index=sorted_idxs, src=sorted_idxs_to_remove)
+                probs[idxs_to_remove] = 0
+                
+                probs = probs / torch.sum(probs, dim=-1, keepdim=True)
+                
+                
+            next_token = torch.multinomial(probs, num_samples=1)
+            
+            # concat
+            dec_idx = torch.cat([dec_idx, next_token], dim=1)
+        
+            # check eos
+            if next_token.item() == eos_token_id:
+                break
+            
+        return dec_idx[:, 1:]        
+        
     def print_info(self):
         print(f"Total parameters: {sum(p.numel() for p in self.parameters())/1e6:.2f} M")
 

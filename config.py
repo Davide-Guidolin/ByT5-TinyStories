@@ -36,3 +36,10 @@ class TrainConfig:
     warmup_steps: int = 10 * accumulation_steps
     max_step: int = 500 * accumulation_steps
     save_interval: int = 100 * accumulation_steps
+    
+@dataclass
+class InferenceConfig:
+    prompt_text: str = "Once upon a time" # prompt used during generation
+    temperature: float = 0.7
+    top_p: float = 0.9
+    top_k: float = None

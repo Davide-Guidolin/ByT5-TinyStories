@@ -1,6 +1,6 @@
 from data import TinyStoriesDataset, PadCollator, TinyStories
 from t5 import T5
-from config import T5Config, DataConfig, TrainConfig
+from config import T5Config, DataConfig, TrainConfig, InferenceConfig
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
@@ -68,14 +68,71 @@ def get_lr(step, train_config):
     
     return train_config.min_lr + coeff * (train_config.max_lr - train_config.min_lr)
 
+def generate_story(
+    model: T5, 
+    prompt: str, 
+    data_config: DataConfig, 
+    max_new_tokens: int = 128,
+    temperature: float = 1.0,
+    top_k: int = None,
+    top_p: float = None
+) -> str:
+    prompt = list(prompt.encode("utf-8"))
+    device = next(model.parameters()).device
+    
+    # create input tensor of bytes
+    prompt = torch.tensor(prompt, dtype=torch.long, device=device).unsqueeze(0)
+    
+    # generate out tensor of bytes
+    out = model.generate(
+        prompt, 
+        max_new_tokens=max_new_tokens, 
+        eos_token_id=data_config.eos_token_id, 
+        pad_token_id=data_config.pad_token_id,
+        temperature=temperature,
+        top_k=top_k,
+        top_p=top_p
+    )    
+    out = out.squeeze().cpu().tolist()
+    
+    if isinstance(out, int):
+        out = [out]
+        
+    # filter PAD and EOS
+    final_string_parts = []
+    byte_chunk = []
+    for tok_id in out:
+        if tok_id < 256:
+            byte_chunk.append(tok_id)
+        else:
+            # first decode valid bytes
+            if byte_chunk:
+                final_string_parts.append(bytes(byte_chunk).decode("utf-8", errors='replace'))
+                byte_chunk = []
+
+            # append eos or pad
+            if tok_id == data_config.eos_token_id:
+                final_string_parts.append("[EOS]")
+            if tok_id == data_config.pad_token_id:
+                final_string_parts.append("[PAD]")
+    
+    # decode remaining bytes
+    if byte_chunk:
+        final_string_parts.append(bytes(byte_chunk).decode("utf-8", errors='replace'))
+            
+    return "".join(final_string_parts)
+
 if __name__ == "__main__":
     
     t5_config = T5Config()
     data_config = DataConfig()
     train_config = TrainConfig()
+    inference_config = InferenceConfig()
     
     device = init_torch_and_random(seed=train_config.random_seed)
     run = init_wandb(t5_config, data_config, train_config)
+    
+    generation_table = wandb.Table(columns=["step", "prompt", "generation", "loss"], log_mode="INCREMENTAL")
     
     # load dataset
     dataset = TinyStories()
@@ -115,6 +172,7 @@ if __name__ == "__main__":
     model = T5(t5_config)
     model.to(device)
     model.to(torch.bfloat16)
+    model.train()
     
     model.print_info()
     
@@ -175,15 +233,31 @@ if __name__ == "__main__":
             avg_tok_per_sec = accumulated_tok_per_sec / train_config.accumulation_steps
             accumulated_tok_per_sec = 0.0
             
+            model.eval()
+            model_out = generate_story(
+                model, 
+                prompt=inference_config.prompt_text, 
+                data_config=data_config, 
+                max_new_tokens=128,
+                temperature=inference_config.temperature,
+                top_k=inference_config.top_k,
+                top_p=inference_config.top_p
+            )
+            model.train()
+            
+            generation_table.add_data(step + 1, inference_config.prompt_text, model_out, avg_loss)
+            
             wandb.log({
                 "train_loss": avg_loss,
                 "learning_rate": lr,
                 "grad_norm": norm,
                 "dt": avg_dt,
-                "tok_per_sec": avg_tok_per_sec
+                "tok_per_sec": avg_tok_per_sec,
+                "generation": generation_table
             }, step=step)
             
             print(f"step {step+1:5d} | loss: {avg_loss:.6f} | lr: {lr:.4e} | norm: {norm:.4f} | dt: {avg_dt:.2f} ms | tok/sec: {avg_tok_per_sec:.2f} ")
+            print(f"{model_out}")
             
             if (step + 1) % train_config.save_interval == 0:
                 checkpoint = {
