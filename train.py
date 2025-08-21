@@ -133,7 +133,7 @@ if __name__ == "__main__":
     
     if train_config.wandb_log:
         run = init_wandb(t5_config, data_config, train_config)
-        generation_table = wandb.Table(columns=["step", "prompt", "generation", "loss"], log_mode="INCREMENTAL")
+        generation_table = wandb.Table(columns=["step", "prompt", "generation"], log_mode="INCREMENTAL")
     
     os.makedirs(train_config.checkpoint_folder, exist_ok=True)
     
@@ -219,6 +219,7 @@ if __name__ == "__main__":
         loss = loss / train_config.accumulation_steps
         loss.backward()
         
+        # optimize and log
         if (step + 1) % train_config.accumulation_steps == 0:
             # clip gradients
             norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -237,43 +238,50 @@ if __name__ == "__main__":
             avg_tok_per_sec = accumulated_tok_per_sec / train_config.accumulation_steps
             accumulated_tok_per_sec = 0.0
             
-            model.eval()
-            model_out = generate_story(
-                model, 
-                prompt=inference_config.prompt_text, 
-                data_config=data_config, 
-                max_new_tokens=128,
-                temperature=inference_config.temperature,
-                top_k=inference_config.top_k,
-                top_p=inference_config.top_p
-            )
-            model.train()
-            
-            if train_config.wandb_log:
-                generation_table.add_data(step + 1, inference_config.prompt_text, model_out, avg_loss)
-                
+            if train_config.wandb_log:                
                 run.log({
                     "train_loss": avg_loss,
                     "learning_rate": lr,
                     "grad_norm": norm,
                     "dt": avg_dt,
-                    "tok_per_sec": avg_tok_per_sec,
-                    "generation": generation_table
-                }, step=step)
+                    "tok_per_sec": avg_tok_per_sec
+                }, step=step+1)
             
             print(f"step {step+1:5d} | loss: {avg_loss:.6f} | lr: {lr:.4e} | norm: {norm:.4f} | dt: {avg_dt:.2f} ms | tok/sec: {avg_tok_per_sec:.2f} ")
-            print(f"{model_out}")
+        
+        # log generation
+        if (step + 1) % train_config.log_generation_step == 0:
+            model.eval()
+            model_out = generate_story(
+                model, 
+                prompt=inference_config.prompt_text, 
+                data_config=data_config, 
+                max_new_tokens=t5_config.block_size,
+                temperature=inference_config.temperature,
+                top_k=inference_config.top_k,
+                top_p=inference_config.top_p
+            )
+            model.train()
+            print(f"{inference_config.prompt_text} {model_out}")
             
-            if (step + 1) % train_config.save_interval == 0:
-                checkpoint = {
-                    'model': model.state_dict(),
-                    'optimizer': optimizer.state_dict(),
-                    'step': step,
-                    'loss': loss.item()
-                }
-                print(f"Saving checkpoint at step {step}...")
-                torch.save(checkpoint, os.path.join(train_config.checkpoint_folder, f'checkpoint_{step}.pt'))
-                print("Checkpoint saved")
+            if train_config.wandb_log:
+                generation_table.add_data(step + 1, inference_config.prompt_text, model_out)
+                
+                run.log({
+                    "generation": generation_table
+                }, step=step+1)
+            
+        # save checkpoint
+        if (step + 1) % train_config.save_interval == 0:
+            checkpoint = {
+                'model': model.state_dict(),
+                'optimizer': optimizer.state_dict(),
+                'step': step,
+                'loss': loss.item()
+            }
+            print(f"Saving checkpoint at step {step}...")
+            torch.save(checkpoint, os.path.join(train_config.checkpoint_folder, f'checkpoint_{step}.pt'))
+            print("Checkpoint saved")
         
         torch.cuda.synchronize()
         t1 = time.perf_counter()

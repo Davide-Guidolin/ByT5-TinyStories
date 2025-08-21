@@ -37,7 +37,8 @@ class TrainConfig:
     max_step: int = 500 * accumulation_steps
     save_interval: int = 500 * accumulation_steps
     checkpoint_folder: str = "./checkpoints"
-    wandb_log: bool = False
+    wandb_log: bool = True
+    log_generation_step: int = 10 * accumulation_steps
     
 @dataclass
 class InferenceConfig:
