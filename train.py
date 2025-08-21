@@ -132,6 +132,8 @@ if __name__ == "__main__":
     device = init_torch_and_random(seed=train_config.random_seed)
     run = init_wandb(t5_config, data_config, train_config)
     
+    os.makedirs(train_config.checkpoint_folder, exist_ok=True)
+    
     generation_table = wandb.Table(columns=["step", "prompt", "generation", "loss"], log_mode="INCREMENTAL")
     
     # load dataset
@@ -148,7 +150,7 @@ if __name__ == "__main__":
         batch_size=train_config.B,
         collate_fn=PadCollator(data_config.pad_token_id),
         shuffle=True,
-        num_workers=2,
+        num_workers=8,
         pin_memory=True
     )
     train_iter = cycle(train_loader)
@@ -164,7 +166,7 @@ if __name__ == "__main__":
         batch_size=train_config.B,
         collate_fn=PadCollator(data_config.pad_token_id),
         shuffle=True,
-        num_workers=2,
+        num_workers=8,
         pin_memory=True
     )
     
@@ -179,13 +181,13 @@ if __name__ == "__main__":
     if device == "cuda":
         cuda_cap = torch.cuda.get_device_capability()
         if cuda_cap[0] >= 7:
-            model = torch.compile(model)
+            model = torch.compile(model, mode="max-autotune", fullgraph=True)
         else:
             print(f"Cannot compile the model. Cuda capability {cuda_cap[0]}.{cuda_cap[1]} < 7.0")
     
     # optimizer
     lr = get_lr(0, train_config)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, betas=(0.9, 0.95), eps=1e-8)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, betas=(0.9, 0.95), eps=1e-8, fused=True)
     optimizer.zero_grad()
 
     accumulated_loss = 0.0
@@ -267,7 +269,7 @@ if __name__ == "__main__":
                     'loss': loss.item()
                 }
                 print(f"Saving checkpoint at step {step}...")
-                torch.save(checkpoint, f'checkpoint_{step}.pt')
+                torch.save(checkpoint, os.path.join(train_config.checkpoint_folder, f'checkpoint_{step}.pt'))
                 print("Checkpoint saved")
         
         torch.cuda.synchronize()

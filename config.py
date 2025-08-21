@@ -3,8 +3,8 @@ from dataclasses import dataclass
 @dataclass
 class T5Config:
     vocab_size: int = 258 # vocabulary size. 0 - 255 bytes, 256 PAD, 257 EOS
-    block_size: int = 128 #1024 # max context length
-    n_embd: int = 768# 1472 # embedding size
+    block_size: int = 128 # 1024 # max context length
+    n_embd: int = 768 # 1472 # embedding size
     n_head: int = 4 # number of attention heads
     n_layer_dec: int = 4 # number of decoder layers
     n_layer_enc: int = 3 * n_layer_dec # number of encoder layers
@@ -35,7 +35,8 @@ class TrainConfig:
     min_lr: float = max_lr * 0.1
     warmup_steps: int = 10 * accumulation_steps
     max_step: int = 500 * accumulation_steps
-    save_interval: int = 100 * accumulation_steps
+    save_interval: int = 1 * accumulation_steps
+    checkpoint_folder: str = "./checkpoints"
     
 @dataclass
 class InferenceConfig:
