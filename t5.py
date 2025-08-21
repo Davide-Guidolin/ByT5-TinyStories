@@ -23,7 +23,6 @@ class MultiHeadSelfAttention(nn.Module):
         self.n_head = n_head
         self.n_embd = n_embd
         self.dim_head = n_embd // n_head
-        self.scale = self.dim_head ** -0.5
         self.is_causal = is_causal
         
         # key, query, value for all heads (will be split later)
@@ -53,21 +52,35 @@ class MultiHeadSelfAttention(nn.Module):
         v = v.view(B, T, self.n_head, self.dim_head).transpose(1, 2) # (B, n_head, T, dim_head)
         
         # attention calculation
-        attn = (q @ k.transpose(-2, -1)) # (B, n_head, T, T)
+        # attn = (q @ k.transpose(-2, -1)) # (B, n_head, T, T)
         
-        if position_bias is not None:
-            attn = attn + position_bias
+        # if position_bias is not None:
+        #     attn = attn + position_bias
             
-        attn = attn / self.scale
+        # attn = attn / self.scale
         
+        # attn = F.softmax(attn, dim=-1)
+        # attn = self.attn_dropout(attn)
+        # y = attn @ v # (B, n_head, T, dim_head)
+        
+        # flash attention
+        attn_mask = position_bias
         if self.is_causal:
             # mask future tokens
-            mask = self.bias[:, :, :T, :T] == 0
-            attn = attn.masked_fill(mask, -torch.inf)
+            causal_mask = self.bias[:, :, :T, :T] == 0
+            
+            if attn_mask is None:
+                attn_mask = torch.zeros(1, 1, T, T, dtype=q.dtype, device=q.device).masked_fill(causal_mask, -torch.inf)
+            else:
+                attn_mask = attn_mask.masked_fill(causal_mask, -torch.inf)
         
-        attn = F.softmax(attn, dim=-1)
-        attn = self.attn_dropout(attn)
-        y = attn @ v # (B, n_head, T, dim_head)
+        y = F.scaled_dot_product_attention(
+            q, 
+            k, 
+            v,
+            attn_mask=attn_mask,
+            dropout_p=self.attn_dropout.p if self.training else 0.0
+        )
         
         # output projection
         y = y.transpose(1, 2).contiguous().view(B, T, C)
@@ -92,7 +105,6 @@ class CrossAttention(nn.Module):
         self.n_head = n_head
         self.n_embd = n_embd
         self.dim_head = n_embd // n_head
-        self.scale = self.dim_head ** -0.5
         
         # query, key, value
         self.attn_q = nn.Linear(n_embd, n_embd, bias=False)
@@ -116,16 +128,24 @@ class CrossAttention(nn.Module):
         k = k.view(B, T_kv, self.n_head, self.dim_head).transpose(1, 2)
         v = v.view(B, T_kv, self.n_head, self.dim_head).transpose(1, 2)
         
-        attn = (q @ k.transpose(-2, -1))
+        # attn = (q @ k.transpose(-2, -1))
         
-        if position_bias is not None:
-            attn = attn + position_bias
+        # if position_bias is not None:
+        #     attn = attn + position_bias
             
-        attn = attn / self.scale
+        # attn = attn / self.scale
    
-        attn = F.softmax(attn, dim=-1)
-        attn = self.attn_dropout(attn)
-        y = attn @ v
+        # attn = F.softmax(attn, dim=-1)
+        # attn = self.attn_dropout(attn)
+        # y = attn @ v
+        
+        y = F.scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            attn_mask=position_bias,
+            dropout_p=self.attn_dropout.p if self.training else 0.0
+        )
         
         y = y.transpose(1, 2).contiguous().view(B, T_q, C)
         y = self.proj(y)

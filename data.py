@@ -9,15 +9,19 @@ import os
 class TinyStories:
     def __init__(self, dataset_id: str = "roneneldan/TinyStories"):
         self.dataset_id = dataset_id
-        self.dataset = load_dataset(self.dataset_id)
+        self.dataset = None
         
     def get_train(self) -> HFDataset:
+        if self.dataset is None:
+            self.dataset = load_dataset(self.dataset_id)
         if 'train' in self.dataset:
             return self.dataset['train']
         
         raise ValueError("Train split not found in the dataset")
     
     def get_validation(self) -> HFDataset:
+        if self.dataset is None:
+            self.dataset = load_dataset(self.dataset_id)
         if 'validation' in self.dataset:
             return self.dataset['validation']
         

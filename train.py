@@ -130,11 +130,13 @@ if __name__ == "__main__":
     inference_config = InferenceConfig()
     
     device = init_torch_and_random(seed=train_config.random_seed)
-    run = init_wandb(t5_config, data_config, train_config)
+    
+    if train_config.wandb_log:
+        run = init_wandb(t5_config, data_config, train_config)
+        generation_table = wandb.Table(columns=["step", "prompt", "generation", "loss"], log_mode="INCREMENTAL")
     
     os.makedirs(train_config.checkpoint_folder, exist_ok=True)
     
-    generation_table = wandb.Table(columns=["step", "prompt", "generation", "loss"], log_mode="INCREMENTAL")
     
     # load dataset
     dataset = TinyStories()
@@ -247,16 +249,17 @@ if __name__ == "__main__":
             )
             model.train()
             
-            generation_table.add_data(step + 1, inference_config.prompt_text, model_out, avg_loss)
-            
-            wandb.log({
-                "train_loss": avg_loss,
-                "learning_rate": lr,
-                "grad_norm": norm,
-                "dt": avg_dt,
-                "tok_per_sec": avg_tok_per_sec,
-                "generation": generation_table
-            }, step=step)
+            if train_config.wandb_log:
+                generation_table.add_data(step + 1, inference_config.prompt_text, model_out, avg_loss)
+                
+                run.log({
+                    "train_loss": avg_loss,
+                    "learning_rate": lr,
+                    "grad_norm": norm,
+                    "dt": avg_dt,
+                    "tok_per_sec": avg_tok_per_sec,
+                    "generation": generation_table
+                }, step=step)
             
             print(f"step {step+1:5d} | loss: {avg_loss:.6f} | lr: {lr:.4e} | norm: {norm:.4f} | dt: {avg_dt:.2f} ms | tok/sec: {avg_tok_per_sec:.2f} ")
             print(f"{model_out}")

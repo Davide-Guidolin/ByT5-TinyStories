@@ -35,8 +35,9 @@ class TrainConfig:
     min_lr: float = max_lr * 0.1
     warmup_steps: int = 10 * accumulation_steps
     max_step: int = 500 * accumulation_steps
-    save_interval: int = 1 * accumulation_steps
+    save_interval: int = 500 * accumulation_steps
     checkpoint_folder: str = "./checkpoints"
+    wandb_log: bool = False
     
 @dataclass
 class InferenceConfig:
