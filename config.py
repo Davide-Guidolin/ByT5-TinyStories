@@ -46,3 +46,49 @@ class InferenceConfig:
     temperature: float = 0.7
     top_p: float = 0.9
     top_k: float = None
+    
+def get_config(model_size: str = "small") -> tuple[T5Config, DataConfig, TrainConfig, InferenceConfig]:
+    
+    data_config = DataConfig()
+    train_config = TrainConfig()
+    inference_config = InferenceConfig()
+    
+    if model_size == "small":
+        t5_config = T5Config(
+           n_embd=1472,
+           mlp_hidden_size=3584,
+           n_layer_dec=4,
+           n_layer_enc=12
+        )
+    elif model_size == "base":
+        t5_config = T5Config(
+           n_embd=1536,
+           mlp_hidden_size=3968,
+           n_layer_dec=6,
+           n_layer_enc=18
+        )
+    elif model_size == "large":
+        t5_config = T5Config(
+           n_embd=1536,
+           mlp_hidden_size=3840,
+           n_layer_dec=12,
+           n_layer_enc=36
+        )
+    elif model_size == "XL":
+        t5_config = T5Config(
+           n_embd=2560,
+           mlp_hidden_size=6720,
+           n_layer_dec=12,
+           n_layer_enc=36
+        )
+    elif model_size == "XXL":
+        t5_config = T5Config(
+           n_embd=4672,
+           mlp_hidden_size=12352,
+           n_layer_dec=12,
+           n_layer_enc=36
+        )
+    else:
+        raise ValueError(f"Unknown model size: {model_size}")
+    
+    return t5_config, data_config, train_config, inference_config

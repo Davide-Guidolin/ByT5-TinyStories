@@ -1,6 +1,6 @@
 from data import TinyStoriesDataset, PadCollator, TinyStories
 from t5 import T5
-from config import T5Config, DataConfig, TrainConfig, InferenceConfig
+from config import get_config, DataConfig
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
@@ -12,6 +12,7 @@ import math
 from dotenv import load_dotenv
 import wandb
 import random
+import argparse
 
 def init_torch_and_random(seed: int = 42):
     device = "cpu"
@@ -123,11 +124,11 @@ def generate_story(
     return "".join(final_string_parts)
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model-size", type=str, default="small", help="Model Size, e.g. small, base, large")
+    args = parser.parse_args()
     
-    t5_config = T5Config()
-    data_config = DataConfig()
-    train_config = TrainConfig()
-    inference_config = InferenceConfig()
+    t5_config, data_config, train_config, inference_config = get_config(model_size=args.model_size)
     
     device = init_torch_and_random(seed=train_config.random_seed)
     
@@ -174,11 +175,12 @@ if __name__ == "__main__":
     
     # create model
     model = T5(t5_config)
+    model.print_info()
+    
     model.to(device)
     model.to(torch.bfloat16)
     model.train()
     
-    model.print_info()
     
     if device == "cuda":
         cuda_cap = torch.cuda.get_device_capability()
