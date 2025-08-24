@@ -266,6 +266,18 @@ class T5(nn.Module):
         # Weight tying with embedding
         self.lm_head.weight = self.transformer.wte.weight
         
+        # init params
+        self.apply(self._init_weights)
+    
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            std = 0.02
+            torch.nn.init.normal_(module.weight, mean=0.0, std=std)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)    
+        elif isinstance(module, nn.Embedding):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+    
     def _relative_position_bucket(self, relative_position: torch.Tensor, num_buckets: int = 32, max_distance: int = 128, bidirectional: bool = True) -> torch.Tensor:
         """
         Calculates the bucket index for a given relative position.

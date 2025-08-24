@@ -197,6 +197,7 @@ if __name__ == "__main__":
     accumulated_tok_per_sec = 0.0
     
     # training loop
+    gradient_step = 0
     for step in range(train_config.max_step):
         t0 = time.perf_counter()
         source, dec_input, target = next(train_iter)
@@ -240,6 +241,7 @@ if __name__ == "__main__":
             
             if train_config.wandb_log:                
                 run.log({
+                    "gradient_step": gradient_step,
                     "train_loss": avg_loss,
                     "learning_rate": lr,
                     "grad_norm": norm,
@@ -247,7 +249,9 @@ if __name__ == "__main__":
                     "tok_per_sec": avg_tok_per_sec
                 }, step=step+1)
             
-            print(f"step {step+1:5d} | loss: {avg_loss:.6f} | lr: {lr:.4e} | norm: {norm:.4f} | dt: {avg_dt:.2f} ms | tok/sec: {avg_tok_per_sec:.2f} ")
+            print(f"gradient_step {gradient_step+1:5d} | step {step+1:5d} | loss: {avg_loss:.6f} | lr: {lr:.4e} | norm: {norm:.4f} | dt: {avg_dt:.2f} ms | tok/sec: {avg_tok_per_sec:.2f} ")
+            
+            gradient_step += 1
         
         # log generation
         if (step + 1) % train_config.log_generation_step == 0:
@@ -277,6 +281,7 @@ if __name__ == "__main__":
                 'model': model.state_dict(),
                 'optimizer': optimizer.state_dict(),
                 'step': step,
+                'gradient_step': gradient_step,
                 'loss': loss.item()
             }
             print(f"Saving checkpoint at step {step}...")
