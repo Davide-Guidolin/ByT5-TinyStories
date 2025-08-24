@@ -2,3 +2,6 @@ __pycache__/
 *.npy
 wandb/
 wandb.env
+papers/
+logs/
+checkpoints/

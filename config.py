@@ -3,8 +3,8 @@ from dataclasses import dataclass
 @dataclass
 class T5Config:
     vocab_size: int = 258 # vocabulary size. 0 - 255 bytes, 256 PAD, 257 EOS
-    block_size: int = 128 # 1024 # max context length
-    n_embd: int = 768 # 1472 # embedding size
+    block_size: int = 1024 # max context length
+    n_embd: int = 1472 # embedding size
     n_head: int = 4 # number of attention heads
     n_layer_dec: int = 4 # number of decoder layers
     n_layer_enc: int = 3 * n_layer_dec # number of encoder layers
@@ -29,20 +29,20 @@ class DataConfig:
 @dataclass
 class TrainConfig:
     random_seed: int = 42
-    B: int = 1 # batch size
-    accumulation_steps: int = 8 # gradient accumulation steps
+    B: int = 64 # batch size
+    accumulation_steps: int = 16 # gradient accumulation steps
     max_lr: float = 6e-4
     min_lr: float = max_lr * 0.1
-    warmup_steps: int = 10 * accumulation_steps
-    max_step: int = 500 * accumulation_steps
-    save_interval: int = 500 * accumulation_steps
+    warmup_steps: int = 10_000 * accumulation_steps
+    max_step: int = 1_000_000 * accumulation_steps
+    save_interval: int = 50_000 * accumulation_steps
     checkpoint_folder: str = "./checkpoints"
     wandb_log: bool = True
-    log_generation_step: int = 10 * accumulation_steps
+    log_generation_step: int = 1_000 * accumulation_steps
     
 @dataclass
 class InferenceConfig:
-    prompt_text: str = "Once upon a time" # prompt used during generation
+    prompt_text: str = "Once upon a time " # prompt used during generation
     temperature: float = 0.7
     top_p: float = 0.9
     top_k: float = None
