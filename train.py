@@ -4,7 +4,7 @@ from config import get_config, DataConfig
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
-from torch.cuda.amp import autocast
+from torch.amp import autocast
 import numpy as np
 import os
 import time
@@ -201,6 +201,7 @@ if __name__ == "__main__":
     # training loop
     gradient_step = 0
     for step in range(train_config.max_step):
+        torch.compiler.cudagraph_mark_step_begin()
         t0 = time.perf_counter()
         source, dec_input, target = next(train_iter)
         
@@ -208,7 +209,7 @@ if __name__ == "__main__":
         dec_input = dec_input.to(device)
         target = target.to(device)
         
-        with autocast(dtype=torch.bfloat16):
+        with autocast(dtype=torch.bfloat16, device_type=device):
             logits = model(source, dec_input)
 
             loss = F.cross_entropy(
