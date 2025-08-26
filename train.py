@@ -185,7 +185,7 @@ if __name__ == "__main__":
     if device == "cuda":
         cuda_cap = torch.cuda.get_device_capability()
         if cuda_cap[0] >= 7:
-            model = torch.compile(model, mode="max-autotune", fullgraph=True)
+            model = torch.compile(model, mode="default", fullgraph=True)
         else:
             print(f"Cannot compile the model. Cuda capability {cuda_cap[0]}.{cuda_cap[1]} < 7.0")
     
