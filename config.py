@@ -31,14 +31,14 @@ class TrainConfig:
     random_seed: int = 42
     B: int = 16 # batch size
     accumulation_steps: int = 16 # gradient accumulation steps
-    max_lr: float = 6e-4
+    max_lr: float = 3e-4
     min_lr: float = max_lr * 0.1
-    warmup_steps: int = 10_000 * accumulation_steps
-    max_step: int = 1_000_000 * accumulation_steps
-    save_interval: int = 50_000 * accumulation_steps
+    warmup_steps: int = 1_000 * accumulation_steps  # multiply steps by accumulation_steps to have the actual number of optimization steps
+    max_step: int = 100_000 * accumulation_steps
+    save_interval: int = 2_000 * accumulation_steps
     checkpoint_folder: str = "./checkpoints"
     wandb_log: bool = True
-    log_generation_step: int = 1_000 * accumulation_steps
+    log_generation_step: int = 150 * accumulation_steps
     
 @dataclass
 class InferenceConfig:
