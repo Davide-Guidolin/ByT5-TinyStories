@@ -146,7 +146,8 @@ if __name__ == "__main__":
         data_config, 
         ts_dataset=dataset,
         split="train",
-        block_size=t5_config.block_size
+        block_size=t5_config.block_size,
+        save_folder=data_config.save_folder
     )
     train_loader = DataLoader(
         train_set, 
@@ -162,7 +163,8 @@ if __name__ == "__main__":
         data_config, 
         ts_dataset=dataset,
         split="validation",
-        block_size=t5_config.block_size
+        block_size=t5_config.block_size,
+        save_folder=data_config.save_folder
     )
     valid_loader = DataLoader(
         valid_set, 

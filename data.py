@@ -34,7 +34,8 @@ class TinyStoriesDataset(Dataset):
         ts_dataset: TinyStories,
         split: str ="train",
         block_size: int = 1024,
-        filename_base: str = "tiny_stories"
+        filename_base: str = "tiny_stories",
+        save_folder: str = "./data"
     ):
         
         assert split in ["train", "validation"], f"Error creating the dataset. Split should be either train or validation. Got {split}."
@@ -45,9 +46,13 @@ class TinyStoriesDataset(Dataset):
         self.filename_base = filename_base
         self.data = None
         
-        if os.path.exists(f'{self.filename_base}_{split}.npy'):
+        self.save_folder = save_folder
+        os.makedirs(self.save_folder, exist_ok=True)
+        self.save_path_name = os.path.join(self.save_folder, self.filename_base)
+        
+        if os.path.exists(f'{self.save_path_name}_{split}.npy'):
             print(f"Loading {split} dataset from disk...")
-            self.data = np.load(f'{self.filename_base}_{split}.npy', mmap_mode='r')
+            self.data = np.load(f'{self.save_path_name}_{split}.npy', mmap_mode='r')
             print("Dataset loaded")
         else:
             if split == "train":

@@ -25,6 +25,7 @@ class DataConfig:
     eos_token_id: int = 257
     mask_pct: float = 0.15 # % of token to mask
     mean_span_corruption_length: int = 20 # mean span corruption length
+    save_folder: str = "./data"
     
 @dataclass
 class TrainConfig:
