@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from config import T5Config
+from typing import Generator
 
 # https://github.com/google-research/text-to-text-transfer-transformer/blob/main/released_checkpoints.md#t511
 
@@ -411,65 +412,80 @@ class T5(nn.Module):
         pad_token_id: int = 256,
         temperature: float = 1.0,
         top_k: int = None,
-        top_p: float = None
-    ) -> torch.Tensor:        
+        top_p: float = None,
+        stream: bool = False
+    ) -> torch.Tensor | Generator[int, None, None]:        
         assert max_new_tokens <= self.config.block_size, f"Cannot generate a sequence of length {max_new_tokens}, maximum block size is {self.config.block_size}"
         
-        # run encoder once
-        encoder_out = self.encode(prompt)
+        def streamer():
+            # run encoder once
+            encoder_out = self.encode(prompt)
+            
+            # start decode with pad token
+            dec_idx = torch.tensor([[pad_token_id]], dtype=torch.long, device=prompt.device)
+            
+            # autoregressive loop
+            for _ in range(max_new_tokens):
+                logits = self.decode(dec_idx, encoder_out)
+                
+                # logits for last token
+                last_tok_logits = logits[:, -1, :]
+                last_tok_logits /= max(temperature, 1e-6)
+                
+                # mask non printable characters and sentinels
+                forbidden_ids = list(range(0, 9)) + list(range(11, 13)) + list(range(14, 32)) # C0 control codes (bytes 0-31), except for tab(9), newline(10), and carriage return(13)
+                forbidden_ids.append(127) # DEL char
+                forbidden_ids += list(range(128, eos_token_id)) # C1 control codes, sentinel tokens, and PAD token
+                last_tok_logits[:, forbidden_ids] = -float('inf')
+                
+                # sample token
+                probs = F.softmax(last_tok_logits, dim=-1)
+                
+                # top_k filtering
+                if top_k is not None:
+                    top_k_probs, _ = torch.topk(probs, k=top_k, dim=-1)
+                    top_k_probs = top_k_probs[:, [-1]]
+                    
+                    mask = probs >= top_k_probs
+                    probs = torch.where(mask, probs, 0)
+                    
+                    # normalize
+                    probs = probs / torch.sum(probs, dim=-1, keepdim=True)
+                    
+                # top_p filtering
+                if top_p is not None:
+                    sorted_probs, sorted_idxs = torch.sort(probs, descending=True)
+                    cum_probs = torch.cumsum(sorted_probs, dim=-1)
+                    
+                    sorted_idxs_to_remove = cum_probs > top_p
+                    # include the index going above top_p
+                    sorted_idxs_to_remove[..., 1:] = sorted_idxs_to_remove[..., :-1].clone()
+                    # safety check to include at least the first index
+                    sorted_idxs_to_remove[..., 0] = 0
+                    
+                    idxs_to_remove = sorted_idxs_to_remove.scatter(dim=-1, index=sorted_idxs, src=sorted_idxs_to_remove)
+                    probs[idxs_to_remove] = 0
+                    
+                    probs = probs / torch.sum(probs, dim=-1, keepdim=True)
+                    
+                    
+                next_token = torch.multinomial(probs, num_samples=1)
+                
+                yield next_token[:, -1].item()
+                
+                # concat
+                dec_idx = torch.cat([dec_idx, next_token], dim=1)
+            
+                # check eos
+                if next_token.item() == eos_token_id:
+                    break
         
-        # start decode with pad token
-        dec_idx = torch.tensor([[pad_token_id]], dtype=torch.long, device=prompt.device)
-        
-        # autoregressive loop
-        for _ in range(max_new_tokens):
-            logits = self.decode(dec_idx, encoder_out)
-            
-            # logits for last token
-            last_tok_logits = logits[:, -1, :]
-            last_tok_logits /= temperature
-            
-            # sample token
-            probs = F.softmax(last_tok_logits, dim=-1)
-            
-            # top_k filtering
-            if top_k is not None:
-                top_k_probs, _ = torch.topk(probs, k=top_k, dim=-1)
-                top_k_probs = top_k_probs[:, [-1]]
-                
-                mask = probs >= top_k_probs
-                probs = torch.where(mask, probs, 0)
-                
-                # normalize
-                probs = probs / torch.sum(probs, dim=-1, keepdim=True)
-                
-            # top_p filtering
-            if top_p is not None:
-                sorted_probs, sorted_idxs = torch.sort(probs, descending=True)
-                cum_probs = torch.cumsum(sorted_probs, dim=-1)
-                
-                sorted_idxs_to_remove = cum_probs > top_p
-                # include the index going above top_p
-                sorted_idxs_to_remove[..., 1:] = sorted_idxs_to_remove[..., :-1].clone()
-                # safety check to include at least the first index
-                sorted_idxs_to_remove[..., 0] = 0
-                
-                idxs_to_remove = sorted_idxs_to_remove.scatter(dim=-1, index=sorted_idxs, src=sorted_idxs_to_remove)
-                probs[idxs_to_remove] = 0
-                
-                probs = probs / torch.sum(probs, dim=-1, keepdim=True)
-                
-                
-            next_token = torch.multinomial(probs, num_samples=1)
-            
-            # concat
-            dec_idx = torch.cat([dec_idx, next_token], dim=1)
-        
-            # check eos
-            if next_token.item() == eos_token_id:
-                break
-            
-        return dec_idx[:, 1:]        
+        if stream:
+            return streamer()
+        else:
+            all_tokens = list(streamer())
+            final_tensor = torch.tensor(all_tokens, dtype=torch.long, device=prompt.device)[1:]
+            return final_tensor
         
     def print_info(self):
         print(f"Total parameters: {sum(p.numel() for p in self.parameters())/1e6:.2f} M")

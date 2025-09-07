@@ -1,6 +1,7 @@
 from data import TinyStoriesDataset, PadCollator, TinyStories
 from t5 import T5
 from config import get_config, DataConfig
+from inference import generate_story
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
@@ -69,66 +70,13 @@ def get_lr(step, train_config):
     
     return train_config.min_lr + coeff * (train_config.max_lr - train_config.min_lr)
 
-def generate_story(
-    model: T5, 
-    prompt: str, 
-    data_config: DataConfig, 
-    max_new_tokens: int = 128,
-    temperature: float = 1.0,
-    top_k: int = None,
-    top_p: float = None
-) -> str:
-    prompt = list(prompt.encode("utf-8"))
-    device = next(model.parameters()).device
-    
-    # create input tensor of bytes
-    prompt = torch.tensor(prompt, dtype=torch.long, device=device).unsqueeze(0)
-    
-    # generate out tensor of bytes
-    out = model.generate(
-        prompt, 
-        max_new_tokens=max_new_tokens, 
-        eos_token_id=data_config.eos_token_id, 
-        pad_token_id=data_config.pad_token_id,
-        temperature=temperature,
-        top_k=top_k,
-        top_p=top_p
-    )    
-    out = out.squeeze().cpu().tolist()
-    
-    if isinstance(out, int):
-        out = [out]
-        
-    # filter PAD and EOS
-    final_string_parts = []
-    byte_chunk = []
-    for tok_id in out:
-        if tok_id < 256:
-            byte_chunk.append(tok_id)
-        else:
-            # first decode valid bytes
-            if byte_chunk:
-                final_string_parts.append(bytes(byte_chunk).decode("utf-8", errors='replace'))
-                byte_chunk = []
-
-            # append eos or pad
-            if tok_id == data_config.eos_token_id:
-                final_string_parts.append("[EOS]")
-            if tok_id == data_config.pad_token_id:
-                final_string_parts.append("[PAD]")
-    
-    # decode remaining bytes
-    if byte_chunk:
-        final_string_parts.append(bytes(byte_chunk).decode("utf-8", errors='replace'))
-            
-    return "".join(final_string_parts)
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-size", type=str, default="small", help="Model Size, e.g. small, base, large")
     args = parser.parse_args()
     
-    t5_config, data_config, train_config, inference_config = get_config(model_size=args.model_size)
+    model_size = args.model_size
+    t5_config, data_config, train_config, inference_config = get_config(model_size=model_size)
     
     device = init_torch_and_random(seed=train_config.random_seed)
     
@@ -287,7 +235,8 @@ if __name__ == "__main__":
                 'optimizer': optimizer.state_dict(),
                 'step': step,
                 'gradient_step': gradient_step,
-                'loss': loss.item()
+                'loss': loss.item(),
+                'model_size': model_size # TODO: save entire model config 
             }
             print(f"Saving checkpoint at step {step}...")
             torch.save(checkpoint, os.path.join(train_config.checkpoint_folder, f'checkpoint_{step}.pt'))
